@@ -38,6 +38,8 @@
   .seg{display:flex;gap:6px;flex-wrap:wrap}
   .wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:auto;max-height:70vh}
   table{width:100%;border-collapse:collapse;font-size:14px}
+  #fg-head th::after{content:attr(data-arrow);color:var(--acc)}
+  #fg-head th:hover{color:var(--fg)}
   th{position:sticky;top:0;background:var(--head);text-align:left;font-size:12px;color:var(--mut);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;cursor:pointer}
   td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
   .r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -118,8 +120,8 @@
 <header id="hdr">
   <h1>MDF Stock &amp; Orders</h1>
   <div class="tabs">
-    <button data-v="rm" class="on">Raw Material</button>
-    <button data-v="fg">FG Stock</button>
+    <button data-v="rm">Raw Material</button>
+    <button data-v="fg" class="on">FG Stock</button>
     <button data-v="po">Pending Orders</button>
   </div>
   <div class="meta"><select class="theme" id="theme" aria-label="Theme">
@@ -161,7 +163,7 @@
       <div class="seg" id="fg-seg"><button data-f="all" class="on">All</button><button data-f="in">In stock</button><button data-f="zero">At zero</button></div>
     </div>
     <div class="wrap"><table>
-      <thead><tr><th>Finished good</th><th class="r">Quantity</th><th>Unit</th><th class="r">Pending orders qty</th><th class="r">Gap</th></tr></thead>
+      <thead id="fg-head"><tr><th data-k="product">Finished good</th><th class="r" data-k="qty">FG Stock</th><th data-k="unit">Unit</th><th class="r" data-k="pend">Pending orders qty</th><th class="r" data-k="gap">Gap</th></tr></thead>
       <tbody id="fg-body"></tbody>
     </table></div>
   </section>
@@ -216,7 +218,7 @@
 const API_URL = 'https://script.google.com/macros/s/AKfycbxfcWADNwzwojx4Hyg8Ww86Difl7zmwB6tBY0sRMZRJeiyJQ9PRd2T0MKPGxW6XulPohQ/exec';
 const AUTO_REFRESH_MIN = 2;
 let D = null;
-const S = {view:'rm', rmF:'all', rmQ:'', fgF:'all', fgQ:'', party:'', prod:'', co:'', stage:''};
+const S = {fgSort:{k:'gap', dir:1}, view:'fg', rmF:'all', rmQ:'', fgF:'all', fgQ:'', party:'', prod:'', co:'', stage:''};
 const $ = id => document.getElementById(id);
 const fmt = n => n == null ? '' : Number(n).toLocaleString('en-IN');
 const el = (tag, txt, cls) => { const e = document.createElement(tag); if (txt != null) e.textContent = txt; if (cls) e.className = cls; return e; };
@@ -307,14 +309,26 @@ function renderFG() {
   $('fg-zero').textContent = D.fg.filter(r => (r.qty || 0) <= 0).length;
   const pend = pendingByProduct();
   const q = S.fgQ.toLowerCase();
+  const {k, dir} = S.fgSort;
   const list = D.fg.filter(r => (!q || r.product.toLowerCase().includes(q)) &&
       (S.fgF === 'all' || (S.fgF === 'zero' ? (r.qty || 0) <= 0 : (r.qty || 0) > 0)))
-    .sort((a, b) => (b.qty || 0) - (a.qty || 0) || a.product.localeCompare(b.product));
+    .map(r => { const p = pend.get(norm(r.product)); return {r, p: p == null ? null : p, gap: p == null ? null : (r.qty || 0) - p}; })
+    .sort((a, b) => {
+      const va = k === 'pend' ? a.p : k === 'gap' ? a.gap : a.r[k];
+      const vb = k === 'pend' ? b.p : k === 'gap' ? b.gap : b.r[k];
+      if (va == null && vb == null) return a.r.product.localeCompare(b.r.product);
+      if (va == null) return 1;            // blanks always at the bottom
+      if (vb == null) return -1;
+      const c = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb));
+      return c * dir || a.r.product.localeCompare(b.r.product);
+    });
+  document.querySelectorAll('#fg-head th').forEach(th => {
+    th.dataset.arrow = th.dataset.k === k ? (dir > 0 ? ' ▲' : ' ▼') : '';
+    th.setAttribute('aria-sort', th.dataset.k === k ? (dir > 0 ? 'ascending' : 'descending') : 'none');
+  });
   const tb = $('fg-body');
   if (!list.length) return empty(tb, 5, 'No finished goods match.');
-  tb.replaceChildren(...list.map(r => {
-    const p = pend.get(norm(r.product));
-    const gap = p != null ? (r.qty || 0) - p : null;
+  tb.replaceChildren(...list.map(({r, p, gap}) => {
     const name = el('span', r.product);
     const wrap = el('span'); wrap.appendChild(name);
     if ((r.qty || 0) <= 0) { wrap.append(' '); wrap.appendChild(pill('At zero', 'bad')); }
@@ -419,6 +433,11 @@ const seg = (id, key, fn) => document.querySelectorAll('#' + id + ' button').for
 seg('rm-seg', 'rmF', renderRM);
 seg('fg-seg', 'fgF', renderFG);
 $('rm-q').oninput = e => { S.rmQ = e.target.value; renderRM(); };
+document.querySelectorAll('#fg-head th').forEach(th => th.onclick = () => {
+  const k = th.dataset.k;
+  S.fgSort = S.fgSort.k === k ? {k, dir: -S.fgSort.dir} : {k, dir: (k === 'product' || k === 'unit') ? 1 : (k === 'gap' ? 1 : -1)};
+  renderFG();
+});
 $('fg-q').oninput = e => { S.fgQ = e.target.value; renderFG(); };
 $('f-clear').onclick = () => { S.party = S.prod = S.co = S.stage = ''; renderPO(); };
 $('reload').onclick = () => load(true);
